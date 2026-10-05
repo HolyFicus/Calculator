@@ -1,0 +1,8 @@
+{
+  "name": "Remix Умный калькулятор оценок",
+  "description": "Умный калькулятор студенческих оценок с математическим прогнозом, гибкой шкалой баллов, AI-советником и обменом шаблонами дисциплин.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
