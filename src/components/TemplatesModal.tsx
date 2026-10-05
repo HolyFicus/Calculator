@@ -8,6 +8,9 @@ import {
   ACADEMIC_PRESET_TEMPLATES,
   AcademicPreset,
   PRESETS_CONFIG,
+  encodeTemplateToUrlCode,
+  decodeTemplateFromUrlCode,
+  generateShareableLink,
 } from '../utils/templateManager';
 import {
   shareTemplateToCloud,
@@ -26,6 +29,7 @@ import {
   ShieldCheck,
   ChevronDown,
   ChevronUp,
+  Link as LinkIcon,
 } from 'lucide-react';
 
 interface TemplatesModalProps {
@@ -35,6 +39,7 @@ interface TemplatesModalProps {
   onImportSubjects: (newSubjects: Subject[], mode: 'append' | 'replace') => void;
   initialTab?: 'import' | 'presets' | 'share';
   initialSubjectId?: string | null;
+  initialCode?: string | null;
 }
 
 export const TemplatesModal: React.FC<TemplatesModalProps> = ({
@@ -44,6 +49,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
   onImportSubjects,
   initialTab = 'import',
   initialSubjectId,
+  initialCode,
 }) => {
   // Check if curated presets catalog is enabled (hidden by default, toggleable for user)
   const [isPresetsEnabled, setIsPresetsEnabled] = useState<boolean>(() => PRESETS_CONFIG.isEnabled());
@@ -55,7 +61,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
   });
 
   // Template Code input for importing
-  const [templateCodeInput, setTemplateCodeInput] = useState('');
+  const [templateCodeInput, setTemplateCodeInput] = useState(initialCode || '');
   const [isLoadingCode, setIsLoadingCode] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ text: string; error?: boolean } | null>(null);
 
@@ -74,6 +80,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
   const [sharedCloudCode, setSharedCloudCode] = useState<string | null>(null);
   const [copiedSharedCode, setCopiedSharedCode] = useState(false);
+  const [copiedShareLink, setCopiedShareLink] = useState(false);
   const [copiedShareMsg, setCopiedShareMsg] = useState(false);
 
   // Developer trigger click counter on shield in footer
@@ -99,8 +106,32 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
         setSelectedSubjectId(initialSubjectId);
         setExportScope('single');
       }
+      if (initialCode) {
+        setTemplateCodeInput(initialCode);
+        setIsLoadingCode(true);
+        decodeTemplateFromUrlCode(initialCode)
+          .then((decoded) => {
+            if (decoded) {
+              setPreviewTemplate(decoded);
+              setStatusMsg({ text: `Найден переданный шаблон «${decoded.title}». Подтвердите добавление:` });
+            } else {
+              // Try cloud fallback
+              return loadTemplateFromCloud(initialCode).then((res) => {
+                if (res.success && res.template) {
+                  const valid = validateAndParseTemplate(res.template);
+                  if (valid.valid && valid.template) {
+                    setPreviewTemplate(valid.template);
+                    setStatusMsg({ text: `Найден переданный шаблон «${valid.template.title}». Подтвердите добавление:` });
+                  }
+                }
+              });
+            }
+          })
+          .catch(() => {})
+          .finally(() => setIsLoadingCode(false));
+      }
     }
-  }, [isOpen, initialTab, initialSubjectId]);
+  }, [isOpen, initialTab, initialSubjectId, initialCode]);
 
   if (!isOpen) return null;
 
@@ -129,18 +160,32 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
     }
   };
 
-  // Load template by code
+  // Load template by code or URL
   const handleLoadTemplateByCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    const code = templateCodeInput.trim().toUpperCase();
-    if (!code) return;
+    const input = templateCodeInput.trim();
+    if (!input) return;
 
     setIsLoadingCode(true);
     setStatusMsg(null);
     setPreviewTemplate(null);
 
+    // 1. Try URL-safe self-contained decoding first (100% offline & GitHub Pages reliable)
     try {
-      const res = await loadTemplateFromCloud(code);
+      const decoded = await decodeTemplateFromUrlCode(input);
+      if (decoded) {
+        setPreviewTemplate(decoded);
+        setStatusMsg({ text: `Найден шаблон «${decoded.title}». Подтвердите импорт:` });
+        setIsLoadingCode(false);
+        return;
+      }
+    } catch (e) {
+      console.warn('URL-safe decode error:', e);
+    }
+
+    // 2. Try loading by cloud code from backend or local storage
+    try {
+      const res = await loadTemplateFromCloud(input.toUpperCase());
       if (res.success && res.template) {
         const valid = validateAndParseTemplate(res.template);
         if (valid.valid && valid.template) {
@@ -152,11 +197,11 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
       }
 
       setStatusMsg({
-        text: `Шаблон по коду "${code}" не найден. Проверьте правильность кода.`,
+        text: `Шаблон по введенному коду или ссылке не найден. Проверьте правильность кода.`,
         error: true,
       });
     } catch (err: any) {
-      setStatusMsg({ text: err.message || 'Ошибка загрузки шаблона по коду', error: true });
+      setStatusMsg({ text: err.message || 'Ошибка загрузки шаблона', error: true });
     } finally {
       setIsLoadingCode(false);
     }
@@ -204,7 +249,7 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
     }
   };
 
-  // Share to cloud
+  // Share to cloud / generate self-contained code & link
   const handleShareToCloud = async () => {
     const tpl = buildCurrentExportTemplate();
     if (!tpl) return;
@@ -212,13 +257,17 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
     setIsPublishing(true);
     setStatusMsg(null);
 
-    const res = await shareTemplateToCloud(tpl);
-    setIsPublishing(false);
+    try {
+      // Generate instant URL-safe self-contained code (works anywhere without backend server!)
+      const selfContainedCode = await encodeTemplateToUrlCode(tpl);
+      setSharedCloudCode(selfContainedCode);
 
-    if (res.success && res.code) {
-      setSharedCloudCode(res.code);
-    } else {
-      setStatusMsg({ text: res.error || 'Не удалось опубликовать шаблон', error: true });
+      // Also try background upload to cloud/localStorage
+      shareTemplateToCloud(tpl, selfContainedCode).catch(() => {});
+    } catch (err: any) {
+      setStatusMsg({ text: err.message || 'Ошибка генерации шаблона', error: true });
+    } finally {
+      setIsPublishing(false);
     }
   };
 
@@ -226,10 +275,20 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
   const handleCopyShareMessage = () => {
     if (!sharedCloudCode) return;
     const title = exportScope === 'single' ? currentSubject?.name : 'все дисциплины семестра';
-    const text = `Привет! Вот готовый шаблон предмета «${title}» со шкалой баллов и контрольными точками. Введи код шаблона в калькуляторе баллов: ${sharedCloudCode}`;
+    const link = generateShareableLink(sharedCloudCode);
+    const text = `Привет! Вот готовый шаблон по предмету «${title}» со шкалой баллов и заданиями.\n👉 Нажми на ссылку, чтобы сразу загрузить в калькулятор:\n${link}\n\n(Или скопируй код в приложении: ${sharedCloudCode})`;
     navigator.clipboard.writeText(text);
     setCopiedShareMsg(true);
     setTimeout(() => setCopiedShareMsg(false), 2500);
+  };
+
+  // Copy direct 1-click shareable link
+  const handleCopyShareLink = () => {
+    if (!sharedCloudCode) return;
+    const link = generateShareableLink(sharedCloudCode);
+    navigator.clipboard.writeText(link);
+    setCopiedShareLink(true);
+    setTimeout(() => setCopiedShareLink(false), 2500);
   };
 
   return (
@@ -418,19 +477,19 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
               <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-4 space-y-3">
                 <div>
                   <h4 className="text-xs font-bold text-white mb-1">
-                    Введите код шаблона от одногруппника:
+                    Введите код шаблона или прямую ссылку от одногруппника:
                   </h4>
                   <p className="text-[11px] text-neutral-400">
-                    Например, <code className="text-indigo-400 font-mono">SUBJ-K7X9Q2</code> или <code className="text-indigo-400 font-mono">PLAN-M83P1</code>. Шаблон содержит шкалу баллов, контрольные точки и условия автомата.
+                    Вставьте код (начинается с <code className="text-indigo-400 font-mono">SUBJ-</code>) или ссылку из чата. Шаблон моментально откроется без сервера со всеми заданиями и шкалой!
                   </p>
                 </div>
 
                 <form onSubmit={handleLoadTemplateByCode} className="flex gap-2 pt-1">
                   <input
                     type="text"
-                    placeholder="SUBJ-XXXXXX или PLAN-XXXXXX"
+                    placeholder="Вставьте код (SUBJ-...) или ссылку от одногруппника"
                     value={templateCodeInput}
-                    onChange={(e) => setTemplateCodeInput(e.target.value.toUpperCase())}
+                    onChange={(e) => setTemplateCodeInput(e.target.value)}
                     className="flex-1 rounded-xl border border-neutral-700 bg-neutral-900 px-3.5 py-2 font-mono text-xs text-white placeholder-neutral-500 focus:border-indigo-500 focus:outline-none"
                   />
                   <button
@@ -671,15 +730,43 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
 
                 {sharedCloudCode ? (
                   <div className="rounded-xl border border-indigo-500/40 bg-indigo-950/20 p-3.5 space-y-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div className="space-y-3">
                       <div>
-                        <div className="text-[11px] text-neutral-400">Код шаблона для беседы:</div>
-                        <div className="font-mono text-xl font-bold tracking-wider text-amber-300">
+                        <div className="text-[11px] text-neutral-400">Код шаблона (содержит шкалу и задания):</div>
+                        <div className="mt-1 font-mono text-xs font-bold text-amber-300 break-all bg-neutral-950/80 p-2.5 rounded-lg border border-neutral-800">
                           {sharedCloudCode}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={handleCopyShareLink}
+                          className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-500 transition shadow-sm active:scale-95"
+                          title="Скопировать ссылку для моментального открытия в 1 клик"
+                        >
+                          {copiedShareLink ? (
+                            <Check className="h-3.5 w-3.5 text-emerald-300" />
+                          ) : (
+                            <LinkIcon className="h-3.5 w-3.5" />
+                          )}
+                          <span>{copiedShareLink ? 'Ссылка скопирована!' : 'Скопировать ссылку для чата'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleCopyShareMessage}
+                          className="flex items-center gap-1.5 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs font-semibold text-neutral-200 hover:bg-neutral-800 transition active:scale-95"
+                          title="Скопировать готовое приглашение со ссылкой и кодом"
+                        >
+                          {copiedShareMsg ? (
+                            <Check className="h-3.5 w-3.5 text-emerald-400" />
+                          ) : (
+                            <Share2 className="h-3.5 w-3.5 text-indigo-400" />
+                          )}
+                          <span>{copiedShareMsg ? 'Текст скопирован!' : 'Текст для беседы'}</span>
+                        </button>
+
                         <button
                           type="button"
                           onClick={() => {
@@ -687,28 +774,19 @@ export const TemplatesModal: React.FC<TemplatesModalProps> = ({
                             setCopiedSharedCode(true);
                             setTimeout(() => setCopiedSharedCode(false), 2000);
                           }}
-                          className="flex items-center gap-1.5 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-neutral-800 transition"
+                          className="flex items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-xs font-semibold text-neutral-300 hover:bg-neutral-800 transition active:scale-95"
                         >
                           {copiedSharedCode ? (
                             <Check className="h-3.5 w-3.5 text-emerald-400" />
                           ) : (
                             <Copy className="h-3.5 w-3.5" />
                           )}
-                          <span>{copiedSharedCode ? 'Скопировано' : 'Копировать код'}</span>
+                          <span>{copiedSharedCode ? 'Код скопирован' : 'Копировать код'}</span>
                         </button>
+                      </div>
 
-                        <button
-                          type="button"
-                          onClick={handleCopyShareMessage}
-                          className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 transition shadow-sm"
-                        >
-                          {copiedShareMsg ? (
-                            <Check className="h-3.5 w-3.5 text-emerald-400" />
-                          ) : (
-                            <Share2 className="h-3.5 w-3.5" />
-                          )}
-                          <span>{copiedShareMsg ? 'Готово!' : 'Текст для беседы'}</span>
-                        </button>
+                      <div className="text-[11px] text-neutral-400 bg-neutral-900/60 p-2 rounded-lg border border-neutral-800">
+                        💡 <strong>Подсказка:</strong> Одногруппникам достаточно просто нажать на скопированную ссылку — предмет добавится в их калькулятор автоматически!
                       </div>
                     </div>
                   </div>

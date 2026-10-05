@@ -88,16 +88,34 @@ export default function App() {
   const [isTemplatesModalOpen, setIsTemplatesModalOpen] = useState(false);
   const [templatesModalTab, setTemplatesModalTab] = useState<'import' | 'presets' | 'share'>('import');
   const [templatesInitialSubjectId, setTemplatesInitialSubjectId] = useState<string | null>(null);
+  const [templatesInitialCode, setTemplatesInitialCode] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   const handleOpenTemplatesModal = (
     tab: 'import' | 'presets' | 'share' = 'import',
-    subjectId?: string | null
+    subjectId?: string | null,
+    code?: string | null
   ) => {
     setTemplatesModalTab(tab);
     setTemplatesInitialSubjectId(subjectId || null);
+    setTemplatesInitialCode(code || null);
     setIsTemplatesModalOpen(true);
   };
+
+  // Check URL on load for ?tpl=... (1-click direct link from a classmate)
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const tpl = params.get('tpl');
+      if (tpl) {
+        handleOpenTemplatesModal('import', null, tpl);
+        const cleanUrl = window.location.pathname + window.location.hash;
+        window.history.replaceState({}, '', cleanUrl);
+      }
+    } catch (e) {
+      console.error('Failed to parse URL tpl parameter:', e);
+    }
+  }, []);
 
   const handleImportSubjects = (newItems: Subject[], mode: 'append' | 'replace') => {
     if (mode === 'replace') {
@@ -341,11 +359,15 @@ export default function App() {
       {/* Templates Hub Modal */}
       <TemplatesModal
         isOpen={isTemplatesModalOpen}
-        onClose={() => setIsTemplatesModalOpen(false)}
+        onClose={() => {
+          setIsTemplatesModalOpen(false);
+          setTemplatesInitialCode(null);
+        }}
         subjects={subjects}
         onImportSubjects={handleImportSubjects}
         initialTab={templatesModalTab}
         initialSubjectId={templatesInitialSubjectId}
+        initialCode={templatesInitialCode}
       />
 
       <DeleteConfirmModal

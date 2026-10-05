@@ -476,3 +476,244 @@ export function instantiateSubjectsFromTemplate(template: SubjectTemplate): Subj
 
   return [];
 }
+
+/**
+ * Compresses and encodes a SubjectTemplate into a URL-safe self-contained string.
+ * Works 100% reliably on static hosts like GitHub Pages without any backend server!
+ */
+export async function encodeTemplateToUrlCode(template: SubjectTemplate): Promise<string> {
+  const minified: any = {
+    v: 1,
+    t: template.title || 'Предмет',
+    m: template.isMulti ? 1 : 0,
+  };
+
+  if (template.isMulti && Array.isArray(template.subjects)) {
+    minified.s = template.subjects.map((s) => ({
+      n: s.name,
+      c: s.code,
+      t: s.teacher,
+      m: s.maxTotalPoints,
+      g: (s.gradingScale || []).map((g) => ({ id: g.id, n: g.name, min: g.minPoints, p: g.isPassing ? 1 : 0 })),
+      a: (s.assignments || []).map((a) => ({ n: a.name, m: a.maxScore, c: a.category, d: a.dueDate })),
+    }));
+  } else if (template.subject) {
+    const s = template.subject;
+    minified.s = [
+      {
+        n: s.name,
+        c: s.code,
+        t: s.teacher,
+        m: s.maxTotalPoints,
+        g: (s.gradingScale || []).map((g) => ({ id: g.id, n: g.name, min: g.minPoints, p: g.isPassing ? 1 : 0 })),
+        a: (s.assignments || []).map((a) => ({ n: a.name, m: a.maxScore, c: a.category, d: a.dueDate })),
+      },
+    ];
+  }
+
+  const json = JSON.stringify(minified);
+
+  // Modern browser compression with CompressionStream
+  try {
+    if (typeof CompressionStream !== 'undefined') {
+      const cs = new CompressionStream('deflate-raw');
+      const writer = cs.writable.getWriter();
+      writer.write(new TextEncoder().encode(json));
+      writer.close();
+      const chunks: Uint8Array[] = [];
+      const reader = cs.readable.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) chunks.push(value);
+      }
+      const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
+      const total = new Uint8Array(totalLen);
+      let off = 0;
+      for (const c of chunks) {
+        total.set(c, off);
+        off += c.length;
+      }
+      let binary = '';
+      for (let i = 0; i < total.byteLength; i++) {
+        binary += String.fromCharCode(total[i]);
+      }
+      const b64 = btoa(binary)
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+      return `SUBJ-${b64}`;
+    }
+  } catch (e) {
+    console.warn('CompressionStream fallback:', e);
+  }
+
+  // Fallback to base64url
+  const utf8 = encodeURIComponent(json).replace(/%([0-9A-F]{2})/g, (_, p1) =>
+    String.fromCharCode(parseInt(p1, 16))
+  );
+  const b64 = btoa(utf8)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+  return `SUBJ-${b64}`;
+}
+
+/**
+ * Decodes a SubjectTemplate from a share code, URL or encoded string.
+ */
+export async function decodeTemplateFromUrlCode(input: string): Promise<SubjectTemplate | null> {
+  if (!input || typeof input !== 'string') return null;
+
+  let raw = input.trim();
+
+  // If user pasted a full URL (e.g. https://.../?tpl=SUBJ-...)
+  if (raw.includes('tpl=')) {
+    try {
+      const url = new URL(raw, 'https://dummy.org');
+      const param = url.searchParams.get('tpl');
+      if (param) raw = param.trim();
+    } catch {
+      const match = raw.match(/[?&]tpl=([^&]+)/);
+      if (match && match[1]) {
+        raw = decodeURIComponent(match[1]).trim();
+      }
+    }
+  }
+
+  // Strip known prefixes
+  const payload = raw.replace(/^SUBJ-|^PLAN-|^TPL-/, '').trim();
+  if (!payload) return null;
+
+  // Restore base64 padding
+  let b64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4 !== 0) {
+    b64 += '=';
+  }
+
+  let jsonStr = '';
+
+  // Try DecompressionStream
+  try {
+    if (typeof DecompressionStream !== 'undefined') {
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const ds = new DecompressionStream('deflate-raw');
+      const writer = ds.writable.getWriter();
+      writer.write(bytes);
+      writer.close();
+      const chunks: Uint8Array[] = [];
+      const reader = ds.readable.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) chunks.push(value);
+      }
+      const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
+      const total = new Uint8Array(totalLen);
+      let off = 0;
+      for (const c of chunks) {
+        total.set(c, off);
+        off += c.length;
+      }
+      jsonStr = new TextDecoder().decode(total);
+    }
+  } catch {
+    // If not deflated, try raw base64 decode
+    try {
+      const binary = atob(b64);
+      jsonStr = decodeURIComponent(
+        Array.from(binary)
+          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      );
+    } catch {}
+  }
+
+  if (!jsonStr) {
+    try {
+      const binary = atob(b64);
+      jsonStr = decodeURIComponent(
+        Array.from(binary)
+          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      );
+    } catch {}
+  }
+
+  if (!jsonStr) return null;
+
+  try {
+    const data = JSON.parse(jsonStr);
+
+    // If minified format
+    if (data && data.s && Array.isArray(data.s)) {
+      const subjects: any[] = data.s.map((s: any) => ({
+        name: s.n || 'Предмет',
+        code: s.c || undefined,
+        teacher: s.t || undefined,
+        maxTotalPoints: Number(s.m) || 100,
+        gradingScale: Array.isArray(s.g)
+          ? s.g.map((g: any) => ({
+              id: g.id || `g_${Date.now()}`,
+              name: g.n || 'Оценка',
+              minPoints: Number(g.min) || 0,
+              maxPoints: Number(s.m) || 100,
+              isPassing: g.p !== 0,
+            }))
+          : [],
+        assignments: Array.isArray(s.a)
+          ? s.a.map((a: any, aIdx: number) => ({
+              id: `as_${Date.now()}_${aIdx}`,
+              name: a.n || 'Задание',
+              maxScore: Number(a.m) || 10,
+              earnedScore: null,
+              completed: false,
+              category: a.c || 'test',
+              dueDate: a.d || undefined,
+            }))
+          : [],
+      }));
+
+      if (data.m && subjects.length > 1) {
+        return {
+          format: 'smart_grade_template_v1',
+          exportedAt: new Date().toISOString(),
+          title: data.t || 'Учебный семестр',
+          isMulti: true,
+          subjects,
+        };
+      } else {
+        const single = subjects[0];
+        return {
+          format: 'smart_grade_template_v1',
+          exportedAt: new Date().toISOString(),
+          title: single.name,
+          isMulti: false,
+          subject: single,
+        };
+      }
+    }
+
+    const validated = validateAndParseTemplate(data);
+    if (validated.valid && validated.template) {
+      return validated.template;
+    }
+  } catch (e) {
+    console.error('Failed to parse decoded template JSON:', e);
+  }
+
+  return null;
+}
+
+/**
+ * Builds the direct 1-click shareable URL for classmates.
+ */
+export function generateShareableLink(code: string): string {
+  if (typeof window === 'undefined') return code;
+  const baseUrl = `${window.location.origin}${window.location.pathname}`.replace(/\/+$/, '');
+  return `${baseUrl}?tpl=${encodeURIComponent(code)}`;
+}
