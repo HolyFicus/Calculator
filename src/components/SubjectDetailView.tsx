@@ -23,6 +23,7 @@ import {
   AlertCircle,
   Lightbulb,
   Share2,
+  X,
 } from 'lucide-react';
 
 interface SubjectDetailViewProps {
@@ -59,8 +60,22 @@ export const SubjectDetailView: React.FC<SubjectDetailViewProps> = ({
   const stats = calculateSubjectStats(subject);
   const { targetAnalysis } = stats;
 
+  // Custom target score input state (avoids pre-filling with 0 on smartphone)
+  const [customScoreInput, setCustomScoreInput] = useState<string>(() =>
+    subject.customTargetScore !== undefined ? String(subject.customTargetScore) : ''
+  );
+
+  React.useEffect(() => {
+    if (subject.customTargetScore !== undefined) {
+      setCustomScoreInput(String(subject.customTargetScore));
+    } else {
+      setCustomScoreInput('');
+    }
+  }, [subject.customTargetScore, subject.id]);
+
   // Handle changing target grade
   const handleSelectTargetGrade = (gradeId: string) => {
+    setCustomScoreInput('');
     const updated: Subject = {
       ...subject,
       targetGradeId: gradeId,
@@ -79,6 +94,18 @@ export const SubjectDetailView: React.FC<SubjectDetailViewProps> = ({
       ...subject,
       customTargetScore: clamped,
       targetGradeId: matchingGrade?.id,
+      updatedAt: new Date().toISOString(),
+    };
+    onUpdate(updated);
+  };
+
+  // Dedicated function to clear/reset target grade
+  const handleClearTargetGrade = () => {
+    setCustomScoreInput('');
+    const updated: Subject = {
+      ...subject,
+      targetGradeId: undefined,
+      customTargetScore: undefined,
       updatedAt: new Date().toISOString(),
     };
     onUpdate(updated);
@@ -405,19 +432,45 @@ export const SubjectDetailView: React.FC<SubjectDetailViewProps> = ({
                 </p>
               </div>
 
-              {/* Custom Score Direct Input */}
-              <div className="flex items-center gap-2">
+              {/* Custom Score Direct Input & Reset Button */}
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs text-neutral-400">Или задайте балл:</span>
                 <input
                   type="number"
                   min="0"
                   max={subject.maxTotalPoints}
                   step="0.5"
-                  value={targetAnalysis.targetScore}
-                  onChange={(e) => handleCustomTargetScoreChange(parseFloat(e.target.value) || 0)}
+                  placeholder={String(targetAnalysis.targetScore)}
+                  value={customScoreInput}
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => e.currentTarget.select()}
+                  onChange={(e) => {
+                    let raw = e.target.value;
+                    if (/^0\d/.test(raw)) raw = raw.replace(/^0+/, '');
+                    setCustomScoreInput(raw);
+                    const num = parseFloat(raw);
+                    if (!isNaN(num)) {
+                      handleCustomTargetScoreChange(num);
+                    } else if (raw === '') {
+                      handleClearTargetGrade();
+                    }
+                  }}
                   className="w-20 rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-1.5 text-center font-mono text-sm font-bold text-amber-300 focus:border-indigo-500 focus:outline-none"
                 />
                 <span className="text-xs text-neutral-500">из {subject.maxTotalPoints}</span>
+
+                {/* Separate small button to remove/clear the target grade */}
+                {(subject.targetGradeId || subject.customTargetScore !== undefined) && (
+                  <button
+                    type="button"
+                    onClick={handleClearTargetGrade}
+                    className="flex items-center gap-1 rounded-lg border border-neutral-800 bg-neutral-900/90 px-2.5 py-1 text-xs text-neutral-400 hover:border-neutral-700 hover:text-white transition active:scale-95"
+                    title="Сбросить выбранную целевую оценку"
+                  >
+                    <X className="h-3 w-3 text-neutral-400" />
+                    <span>Сбросить цель</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -431,8 +484,12 @@ export const SubjectDetailView: React.FC<SubjectDetailViewProps> = ({
                   max="10000"
                   step="0.5"
                   value={subject.maxTotalPoints}
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => e.currentTarget.select()}
                   onChange={(e) => {
-                    const val = parseFloat(e.target.value) || 100;
+                    let raw = e.target.value;
+                    if (/^0\d/.test(raw)) raw = raw.replace(/^0+/, '');
+                    const val = parseFloat(raw) || 0;
                     onUpdate({
                       ...subject,
                       maxTotalPoints: val,
@@ -464,7 +521,7 @@ export const SubjectDetailView: React.FC<SubjectDetailViewProps> = ({
               </div>
             </div>
 
-            {/* Grade Scale Buttons */}
+            {/* Grade Scale Selector Buttons (Double click NO LONGER deletes grade) */}
             <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
               {subject.gradingScale.map((grade) => {
                 const isSelected = targetAnalysis.targetGrade?.id === grade.id;
@@ -472,27 +529,12 @@ export const SubjectDetailView: React.FC<SubjectDetailViewProps> = ({
                   <div
                     key={grade.id}
                     onClick={() => handleSelectTargetGrade(grade.id)}
-                    className={`group relative flex flex-col items-center justify-center rounded-xl border p-3 cursor-pointer transition-all ${
+                    className={`group relative flex flex-col items-center justify-center rounded-xl border p-3 cursor-pointer select-none transition-all ${
                       isSelected
                         ? 'border-indigo-500 bg-indigo-500/15 text-white ring-1 ring-indigo-500/40 shadow-lg shadow-indigo-950/40'
                         : 'border-neutral-800 bg-neutral-950/60 text-neutral-400 hover:border-neutral-700 hover:bg-neutral-900 hover:text-neutral-200'
                     }`}
                   >
-                    {/* Delete grade icon if more than 1 grade */}
-                    {subject.gradingScale.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRemoveGrade(grade.id);
-                        }}
-                        className="absolute top-1.5 right-1.5 rounded p-0.5 text-neutral-600 opacity-0 group-hover:opacity-100 hover:bg-rose-500/20 hover:text-rose-400 transition"
-                        title="Удалить оценку"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    )}
-
                     <span className="text-sm font-bold text-white text-center">{grade.name}</span>
 
                     {/* Inline threshold edit */}
@@ -507,9 +549,13 @@ export const SubjectDetailView: React.FC<SubjectDetailViewProps> = ({
                         min="0"
                         max={subject.maxTotalPoints}
                         value={grade.minPoints}
-                        onChange={(e) =>
-                          handleUpdateGradeThreshold(grade.id, parseFloat(e.target.value) || 0)
-                        }
+                        onFocus={(e) => e.target.select()}
+                        onClick={(e) => e.currentTarget.select()}
+                        onChange={(e) => {
+                          let raw = e.target.value;
+                          if (/^0\d/.test(raw)) raw = raw.replace(/^0+/, '');
+                          handleUpdateGradeThreshold(grade.id, parseFloat(raw) || 0);
+                        }}
                         className="w-14 rounded border border-neutral-700 bg-neutral-900 px-1 py-0.5 text-center font-mono text-[11px] font-bold text-amber-300 focus:border-indigo-500 focus:outline-none"
                       />
                       <span>б.</span>
@@ -775,8 +821,15 @@ export const SubjectDetailView: React.FC<SubjectDetailViewProps> = ({
                     required
                     min="1"
                     step="0.5"
+                    placeholder="20"
                     value={newAssignMax}
-                    onChange={(e) => setNewAssignMax(e.target.value)}
+                    onFocus={(e) => e.target.select()}
+                    onClick={(e) => e.currentTarget.select()}
+                    onChange={(e) => {
+                      let raw = e.target.value;
+                      if (/^0\d/.test(raw)) raw = raw.replace(/^0+/, '');
+                      setNewAssignMax(raw);
+                    }}
                     className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-1.5 text-xs text-white font-mono focus:border-indigo-500 focus:outline-none"
                   />
                 </div>
@@ -890,8 +943,12 @@ export const SubjectDetailView: React.FC<SubjectDetailViewProps> = ({
                           max={assignment.maxScore}
                           placeholder="—"
                           value={assignment.earnedScore !== null && assignment.earnedScore !== undefined ? assignment.earnedScore : ''}
+                          onFocus={(e) => e.target.select()}
+                          onClick={(e) => e.currentTarget.select()}
                           onChange={(e) => {
-                            const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                            let raw = e.target.value;
+                            if (/^0\d/.test(raw)) raw = raw.replace(/^0+/, '');
+                            const val = raw === '' ? null : parseFloat(raw);
                             handleUpdateAssignmentScore(assignment.id, val);
                           }}
                           className="w-16 rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-1 text-center font-mono text-xs font-bold text-white focus:border-indigo-500 focus:outline-none"

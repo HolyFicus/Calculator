@@ -253,7 +253,13 @@ export const AddSubjectModal: React.FC<AddSubjectModalProps> = ({
                   step="0.5"
                   required
                   value={maxPoints}
-                  onChange={(e) => setMaxPoints(parseFloat(e.target.value) || 100)}
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => e.currentTarget.select()}
+                  onChange={(e) => {
+                    let raw = e.target.value;
+                    if (/^0\d/.test(raw)) raw = raw.replace(/^0+/, '');
+                    setMaxPoints(parseFloat(raw) || 0);
+                  }}
                   className="w-24 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-1.5 font-mono text-sm font-bold text-amber-300 text-center focus:border-indigo-500 focus:outline-none"
                 />
                 <span className="text-xs text-neutral-400">баллов</span>
@@ -342,9 +348,13 @@ export const AddSubjectModal: React.FC<AddSubjectModalProps> = ({
                       max={maxPoints}
                       required
                       value={grade.minPoints}
-                      onChange={(e) =>
-                        handleUpdateGradeItem(idx, 'minPoints', parseFloat(e.target.value) || 0)
-                      }
+                      onFocus={(e) => e.target.select()}
+                      onClick={(e) => e.currentTarget.select()}
+                      onChange={(e) => {
+                        let raw = e.target.value;
+                        if (/^0\d/.test(raw)) raw = raw.replace(/^0+/, '');
+                        handleUpdateGradeItem(idx, 'minPoints', parseFloat(raw) || 0);
+                      }}
                       className="w-16 rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-1 font-mono text-xs font-bold text-amber-300 text-center focus:outline-none"
                     />
                     <span className="text-[11px]">б.</span>
