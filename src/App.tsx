@@ -14,6 +14,7 @@ import { SubjectDetailView } from './components/SubjectDetailView';
 import { AddSubjectModal } from './components/AddSubjectModal';
 import { TemplatesModal } from './components/TemplatesModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
+import { AuthorBadge } from './components/AuthorBadge';
 
 import { Search, Plus, Filter, BookOpen, Share2, Sparkles } from 'lucide-react';
 import { RUSSIAN_5_SCALE } from './utils/calculator';
@@ -376,6 +377,9 @@ export default function App() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleDeleteConfirm}
       />
+
+      {/* Floating Author Badge in Bottom-Right Corner */}
+      <AuthorBadge />
     </div>
   );
 }
